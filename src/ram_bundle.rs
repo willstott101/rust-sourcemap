@@ -1,4 +1,5 @@
 //! RAM bundle operations
+use regex::Regex;
 use scroll::Pread;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -191,6 +192,40 @@ impl<'a> RamBundle<'a> {
     }
 }
 
+fn js_filename_to_index_original(filename: &str) -> Option<Result<usize>> {
+    let module_regex = Regex::new(r"^(\d+)\.js$").unwrap();
+    match module_regex.captures(filename) {
+        Some(captures) => {
+            let module_string = captures.get(1).unwrap().as_str();
+            Some(
+                module_string
+                    .parse::<usize>()
+                    .or(Err(Error::InvalidRamBundleIndex)),
+            )
+        }
+        None => None,
+    }
+}
+
+/// Filename must be made of unicode digits and the .js extension
+/// Err if the filename uses non-ascii unicode numeric characters
+fn js_filename_to_index_compat(filename: &str) -> Option<Result<usize>> {
+    match filename.rsplit_once(".js") {
+        Some((basename, "")) => {
+            if basename.chars().all(|x| x.is_numeric()) {
+                Some(
+                    basename
+                        .parse::<usize>()
+                        .or(Err(Error::InvalidRamBundleIndex)),
+                )
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Filename must be made of ascii-only digits and the .js extension
 /// Anything else errors with `Error::InvalidRamBundleIndex`
 fn js_filename_to_index_strict(filename: &str) -> Result<usize> {
@@ -201,6 +236,39 @@ fn js_filename_to_index_strict(filename: &str) -> Result<usize> {
         _ => Err(Error::InvalidRamBundleIndex),
     }
 }
+
+/// Filename must be made of ascii-only digits and the .js extension
+/// Anything else returns None
+fn js_filename_to_index_lax(filename: &str) -> Option<usize> {
+    match filename.rsplit_once(".js") {
+        Some((basename, "")) => basename.parse::<usize>().map(Some).unwrap_or(None),
+        _ => None,
+    }
+}
+
+#[test]
+fn test_js_filename_no_extension() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let mut s = "１２３.js";
+    assert!(js_filename_to_index_original(s).unwrap().is_err());
+    assert!(js_filename_to_index_compat(s).unwrap().is_err());
+    assert!(js_filename_to_index_strict(s).is_err());
+    assert_eq!(js_filename_to_index_lax(s), None);
+
+    s = "123.js";
+    assert_eq!(js_filename_to_index_original(s).unwrap().unwrap(), 123);
+    assert_eq!(js_filename_to_index_compat(s).unwrap().unwrap(), 123);
+    assert_eq!(js_filename_to_index_strict(s).unwrap(), 123);
+    assert_eq!(js_filename_to_index_lax(s).unwrap(), 123);
+
+    s = "nope";
+    assert!(js_filename_to_index_original(s).is_none());
+    assert!(js_filename_to_index_compat(s).is_none());
+    assert!(js_filename_to_index_strict(s).is_err());
+    assert!(js_filename_to_index_lax(s).is_none());
+
+    Ok(())
+}
+
 /// Represents a file RAM bundle
 ///
 /// This RAM bundle type is mostly used on Android.
